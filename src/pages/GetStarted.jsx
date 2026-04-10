@@ -16,33 +16,81 @@ export default function GetStarted() {
         Here is a simple example to get you started with XGBoost in Python:
       </p>
       <CodeBlock language="python">{`import xgboost as xgb
-from sklearn.datasets import load_breast_cancer
+import pandas as pd
+import numpy as np
+from xgboost import XGBClassifier, XGBRegressor
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, roc_auc_score, mean_squared_error, r2_score
 
 # Load data
-data = load_breast_cancer()
-X_train, X_test, y_train, y_test = train_test_split(
-    data.data, data.target, test_size=0.2, random_state=42
-)
+df = pd.read_csv('train.csv')
+test_df = pd.read_csv('test.csv')
+
 
 # Create DMatrix
 dtrain = xgb.DMatrix(X_train, label=y_train)
 dtest = xgb.DMatrix(X_test, label=y_test)
 
 # Set parameters
-params = {
-    'max_depth': 3,
-    'eta': 0.1,
-    'objective': 'binary:logistic',
-    'eval_metric': 'logloss'
-}
+model = XGBClassifier(
+    n_estimators=1000,
+    learning_rate=0.05,
+    max_depth=6,
+    subsample=0.8,
+    colsample_bytree=0.8,
+    random_state=42,
+    eval_metric='logloss',  
+    early_stopping_rounds=50,
+    tree_method='hist',
+    device='cuda'
+)
+
+ model = XGBRegressor(
+    n_estimators=1000,
+     learning_rate=0.05,
+     max_depth=6,
+     subsample=0.8,
+     colsample_bytree=0.8,
+     random_state=42,
+     eval_metric='rmse',
+     early_stopping_rounds=50,
+     tree_method='hist',
+     device='cuda'
+ )
 
 # Train model
-num_rounds = 100
-model = xgb.train(params, dtrain, num_rounds)
+model.fit(
+    X_train, y_train,
+    eval_set=[(X_val, y_val)],
+    verbose=100
+)
 
 # Make predictions
-predictions = model.predict(dtest)`}</CodeBlock>
+val_preds = model.predict(X_val)
+val_proba = model.predict_proba(X_val)[:, 1] 
+print(f"Accuracy: {accuracy_score(y_val, val_preds):.4f}")
+print(f"ROC-AUC: {roc_auc_score(y_val, val_proba):.4f}")
+
+
+feature_importance = pd.DataFrame({
+    'feature': X.columns,
+    'importance': model.feature_importances_
+}).sort_values('importance', ascending=False)
+print(feature_importance.head(20))
+
+
+test_preds = model.predict(test_df)
+test_proba = model.predict_proba(test_df)[:, 1]
+
+
+
+submission = pd.DataFrame({
+    'id': test_df['id'], 
+    'target': test_proba
+})
+
+
+submission.to_csv('submission.csv', index=False)`}</CodeBlock>
 
       <InfoBox type="note" title="Note">
         <code>DMatrix</code> is an internal data structure used by XGBoost, which is optimized
