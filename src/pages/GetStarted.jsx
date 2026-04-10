@@ -103,25 +103,36 @@ submission.to_csv('submission.csv', index=False)`}</CodeBlock>
         scikit-learn ecosystem:
       </p>
       <CodeBlock language="python">{`from xgboost import XGBClassifier
-from sklearn.datasets import load_iris
-from sklearn.model_selection import cross_val_score
+import pandas as pd
+from xgboost import XGBRegressor
+from sklearn.svm import SVR
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import make_pipeline
 
-# Load data
-iris = load_iris()
-X, y = iris.data, iris.target
+train = pd.read_csv("train.csv")
+test = pd.read_csv("test.csv")
 
-# Create and train model
-model = XGBClassifier(
-    n_estimators=100,
-    max_depth=3,
-    learning_rate=0.1,
-    objective='multi:softmax',
-    num_class=3
-)
+X = train.drop(columns=["target"])
+y = train["target"]
+X_test = test.drop(columns=["id"])
 
-# Cross-validation
-scores = cross_val_score(model, X, y, cv=5)
-print(f"CV Accuracy: {scores.mean():.3f} (+/- {scores.std()*2:.3f})")`}</CodeBlock>
+xgb = XGBRegressor(n_estimators=200, max_depth=5, learning_rate=0.05)
+svr = make_pipeline(StandardScaler(), SVR(C=10, kernel="rbf", epsilon=0.1))
+
+xgb.fit(X, y)
+svr.fit(X, y)
+
+pred1 = xgb.predict(X_test)
+pred2 = svr.predict(X_test)
+
+pred = 0.5 * pred1 + 0.5 * pred2
+
+sub = pd.DataFrame({
+    "id": test["id"],
+    "target": pred
+})
+
+sub.to_csv("submission.csv", index=False)`}</CodeBlock>
 
       <h2 id="early-stopping">Early Stopping</h2>
       <p>
