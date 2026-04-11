@@ -50,16 +50,9 @@ export default function Sidebar() {
 
   return (
     <aside className="fixed left-0 top-0 w-72 h-screen bg-[#f8f9fa] border-r border-[#e0e0e0] overflow-y-auto">
-      <div className="p-6 border-b border-[#e0e0e0]">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-gradient-to-br from-[#1e88e5] to-[#1565c0] rounded-lg flex items-center justify-center">
-            <span className="text-white font-bold text-sm">XG</span>
-          </div>
-          <div>
-            <h1 className="text-lg font-bold text-[#1565c0]">XGBOOST</h1>
-            <p className="text-xs text-gray-500">DOCUMENTATION</p>
-          </div>
-        </div>
+      <div className="p-5 border-b border-[#e0e0e0]">
+        <h1 className="text-xl font-semibold text-[#404040]">XGBoost</h1>
+        <p className="text-xs text-gray-500 mt-0.5">Documentation</p>
       </div>
 
       <div className="p-4">
@@ -84,10 +77,10 @@ export default function Sidebar() {
               <NavLink
                 to={item.path}
                 className={({ isActive }) =>
-                  `flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm transition-colors ${
+                  `flex items-center gap-3 px-3 py-2 text-sm transition-all duration-150 border-l-3 ${
                     isActive
-                      ? 'bg-[#1565c0] text-white'
-                      : 'text-gray-700 hover:bg-gray-200'
+                      ? 'border-l-[#1565c0] text-[#1565c0] bg-[#e3f2fd]/50 font-medium'
+                      : 'border-l-transparent text-gray-600 hover:text-gray-900 hover:bg-gray-100/70'
                   }`
                 }
               >

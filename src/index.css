@@ -166,3 +166,14 @@ li {
 p {
   margin: 12px 0;
 }
+
+/* Sidebar navigation */
+.border-l-3 {
+  border-left-width: 3px;
+  border-left-style: solid;
+}
+
+/* Sidebar nav items - smooth transitions */
+nav a {
+  transition: all 0.15s ease;
+}
