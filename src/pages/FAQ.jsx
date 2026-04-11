@@ -21,26 +21,66 @@ const faqs = [
     answer: "There are several strategies: reduce max_depth, increase min_child_weight, use subsample and colsample_bytree for regularization, increase lambda (L2 regularization), and use early stopping."
   },
   {
-    question: "Can XGBoost handle categorical features?",
+    question: "Does Xgb provide Feature Enginnering?",
     answer: "Yes, XGBoost has native support for categorical features when using the hist tree method. Set enable_categorical=True and ensure your categorical columns have the 'category' dtype in pandas.",
-    code: `# Enable categorical feature support
-model = xgb.XGBClassifier(
-    tree_method='hist',
-    enable_categorical=True
-)
+    code: `import numpy as np
+import pandas as pd
+from sklearn.preprocessing import StandardScaler, PolynomialFeatures
 
-# Make sure to convert columns to category dtype
-df['category_col'] = df['category_col'].astype('category')`
-  },
-  {
-    question: "How do I save and load a model?",
-    answer: "Use the save_model and load_model methods. JSON format is recommended for portability.",
-    code: `# Save model
-model.save_model('model.json')
+def feature_engineering(df, num, cat, dt_cols=None, target=None,
+                         lag_col=None, lags=[1,2], interact=None):
+    df = df.copy()
 
-# Load model
-loaded_model = xgb.Booster()
-loaded_model.load_model('model.json')`
+    # Пропуски
+    for c in num: df[f"{c}_null"] = df[c].isnull().astype(int); df[c] = df[c].fillna(df[c].median())
+    for c in cat: df[c] = df[c].fillna(df[c].mode()[0])
+
+    # Числовые: log + scale + poly
+    for c in num: df[f"{c}_log"] = np.log1p(df[c].clip(0))
+    df[num] = StandardScaler().fit_transform(df[num])
+    if len(num) >= 2:
+        poly = PolynomialFeatures(2, include_bias=False).fit_transform(df[num[:2]])
+        df[[f"poly_{i}" for i in range(poly.shape[1])]] = poly
+
+    # Категориальные: OHE / target+freq encoding
+    for c in cat:
+        if df[c].nunique() <= 10:
+            df = pd.get_dummies(df, columns=[c], prefix=c)
+        else:
+            df[f"{c}_freq"] = df[c].map(df[c].value_counts(normalize=True))
+            if target: df[f"{c}_target"] = df[c].map(df.groupby(c)[target].mean())
+
+    # Временные
+    for c in (dt_cols or []):
+        dt = pd.to_datetime(df[c])
+        df[f"{c}_hour"] = dt.dt.hour; df[f"{c}_dow"] = dt.dt.dayofweek
+        df[f"{c}_month"] = dt.dt.month; df[f"{c}_weekend"] = (dt.dt.dayofweek >= 5).astype(int)
+
+    # Лаги + rolling
+    if lag_col:
+        for l in lags: df[f"{lag_col}_lag{l}"] = df[lag_col].shift(l)
+        df[f"{lag_col}_roll3"] = df[lag_col].shift(1).rolling(3).mean()
+
+    # Взаимодействия
+    if interact:
+        a, b = interact
+        df[f"{a}x{b}"] = df[a] * df[b]; df[f"{a}d{b}"] = df[a] / (df[b] + 1)
+
+    return df
+
+
+# Пример
+if __name__ == "__main__":
+    df = pd.DataFrame({
+        "age": [25, np.nan, 35, 40], "income": [1000, 5000, 300, 8000],
+        "cat": ["A","B","A","C"], "city": ["x","y","x","z"],
+        "ts": pd.date_range("2024-01-01", periods=4, freq="h"),
+        "sales": [10, 20, 15, 25], "target": [0.1, 0.9, 0.4, 0.7]
+    })
+    out = feature_engineering(df, num=["age","income"], cat=["cat","city"],
+                               dt_cols=["ts"], target="target",
+                               lag_col="sales", interact=("age","income"))
+    print(f"{df.shape[1]} → {out.shape[1]} признаков")`
   },
   {
     question: "What's the difference between native API and scikit-learn API?",
