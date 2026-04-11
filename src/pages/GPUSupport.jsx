@@ -29,19 +29,256 @@ export default function GPUSupport() {
       <CodeBlock language="bash">pip install xgboost</CodeBlock>
 
       <p>Verify GPU is available:</p>
-      <CodeBlock language="python">{`import xgboost as xgb
+      <CodeBlock language="python">{`"""
+LoRA Fine-tuning - Basic Implementation
 
-# Check if CUDA is available
-print(f"XGBoost version: {xgb.__version__}")
+Low-Rank Adaptation of Large Language Models
+Paper: https://arxiv.org/abs/2106.09685
 
-# Try to use GPU
-params = {'tree_method': 'hist', 'device': 'cuda'}
-try:
-    dtrain = xgb.DMatrix([[1, 2], [3, 4]], label=[0, 1])
-    model = xgb.train(params, dtrain, num_boost_round=1)
-    print("GPU is working!")
-except Exception as e:
-    print(f"GPU not available: {e}")`}</CodeBlock>
+Key idea: Instead of fine-tuning all parameters, inject trainable
+rank decomposition matrices into each layer while keeping pretrained
+weights frozen.
+
+Benefits:
+- Drastically reduces trainable parameters (often by 10,000x)
+- Lower memory footprint
+- Faster training
+- Easy to merge/switch between different task adaptations
+"""
+
+import torch
+import torch.nn as nn
+from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments, Trainer
+from peft import LoraConfig, get_peft_model, TaskType
+from datasets import load_dataset
+
+
+# ============================================================================
+# CONFIGURATION
+# ============================================================================
+
+MODEL_NAME = "meta-llama/Llama-2-7b-hf"  # base model
+DATASET_NAME = "tatsu-lab/alpaca"        # instruction dataset
+
+# LoRA hyperparameters
+LORA_R = 8              # rank of decomposition matrices
+LORA_ALPHA = 16         # scaling factor (typically 2 * r)
+LORA_DROPOUT = 0.05     # dropout probability
+TARGET_MODULES = [      # which layers to inject LoRA
+    "q_proj",
+    "k_proj", 
+    "v_proj",
+    "o_proj",
+]
+
+# Training hyperparameters
+BATCH_SIZE = 4
+GRADIENT_ACCUMULATION_STEPS = 4
+NUM_EPOCHS = 3
+LEARNING_RATE = 2e-4
+MAX_LENGTH = 512
+OUTPUT_DIR = "./lora_model"
+
+
+# ============================================================================
+# LOAD BASE MODEL AND TOKENIZER
+# ============================================================================
+
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+tokenizer.pad_token = tokenizer.eos_token
+
+model = AutoModelForCausalLM.from_pretrained(
+    MODEL_NAME,
+    torch_dtype=torch.float16,
+    device_map="auto",
+    load_in_8bit=True,  # 8-bit quantization for memory efficiency
+)
+
+
+# ============================================================================
+# CONFIGURE LORA
+# ============================================================================
+
+lora_config = LoraConfig(
+    r=LORA_R,                          # rank
+    lora_alpha=LORA_ALPHA,             # scaling
+    target_modules=TARGET_MODULES,     # which modules to adapt
+    lora_dropout=LORA_DROPOUT,
+    bias="none",                       # don't train bias terms
+    task_type=TaskType.CAUSAL_LM,      # causal language modeling
+)
+
+# Inject LoRA adapters into model
+model = get_peft_model(model, lora_config)
+
+# Print trainable parameters
+trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+all_params = sum(p.numel() for p in model.parameters())
+print(f"Trainable params: {trainable_params:,} ({100 * trainable_params / all_params:.2f}%)")
+print(f"All params: {all_params:,}")
+
+
+# ============================================================================
+# PREPARE DATASET
+# ============================================================================
+
+def format_instruction(sample):
+    """Format dataset sample into instruction-following format"""
+    instruction = sample["instruction"]
+    input_text = sample["input"]
+    output = sample["output"]
+    
+    if input_text:
+        prompt = f"### Instruction:\n{instruction}\n\n### Input:\n{input_text}\n\n### Response:\n{output}"
+    else:
+        prompt = f"### Instruction:\n{instruction}\n\n### Response:\n{output}"
+    
+    return prompt
+
+
+def preprocess_function(examples):
+    """Tokenize the dataset"""
+    texts = [format_instruction(ex) for ex in examples]
+    
+    tokenized = tokenizer(
+        texts,
+        truncation=True,
+        max_length=MAX_LENGTH,
+        padding="max_length",
+        return_tensors="pt"
+    )
+    
+    # For causal LM, labels are the same as input_ids
+    tokenized["labels"] = tokenized["input_ids"].clone()
+    
+    return tokenized
+
+
+# Load and preprocess dataset
+dataset = load_dataset(DATASET_NAME)
+train_dataset = dataset["train"].map(
+    preprocess_function,
+    batched=True,
+    remove_columns=dataset["train"].column_names
+)
+
+
+# ============================================================================
+# TRAINING ARGUMENTS
+# ============================================================================
+
+training_args = TrainingArguments(
+    output_dir=OUTPUT_DIR,
+    per_device_train_batch_size=BATCH_SIZE,
+    gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
+    num_train_epochs=NUM_EPOCHS,
+    learning_rate=LEARNING_RATE,
+    fp16=True,                          # mixed precision training
+    logging_steps=10,
+    save_strategy="epoch",
+    save_total_limit=2,
+    warmup_ratio=0.03,
+    lr_scheduler_type="cosine",
+    optim="adamw_torch",
+    remove_unused_columns=False,
+)
+
+
+# ============================================================================
+# TRAINER
+# ============================================================================
+
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=train_dataset,
+    tokenizer=tokenizer,
+)
+
+
+# ============================================================================
+# TRAIN
+# ============================================================================
+
+print("Starting LoRA fine-tuning...")
+trainer.train()
+
+# Save LoRA adapters only (very small file ~10-50MB)
+model.save_pretrained(OUTPUT_DIR)
+tokenizer.save_pretrained(OUTPUT_DIR)
+
+print(f"LoRA adapters saved to {OUTPUT_DIR}")
+
+
+# ============================================================================
+# INFERENCE WITH LORA
+# ============================================================================
+
+def generate_response(instruction, input_text=""):
+    """Generate response using fine-tuned model"""
+    if input_text:
+        prompt = f"### Instruction:\n{instruction}\n\n### Input:\n{input_text}\n\n### Response:\n"
+    else:
+        prompt = f"### Instruction:\n{instruction}\n\n### Response:\n"
+    
+    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+    
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=256,
+            temperature=0.7,
+            top_p=0.9,
+            do_sample=True,
+        )
+    
+    response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    return response.split("### Response:\n")[-1].strip()
+
+
+# Test inference
+test_instruction = "Explain what is machine learning in simple terms"
+response = generate_response(test_instruction)
+print(f"\nInstruction: {test_instruction}")
+print(f"Response: {response}")
+
+
+# ============================================================================
+# LOAD LORA MODEL LATER
+# ============================================================================
+
+"""
+To load the LoRA model in a new session:
+
+from peft import PeftModel
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+base_model = AutoModelForCausalLM.from_pretrained(
+    "meta-llama/Llama-2-7b-hf",
+    torch_dtype=torch.float16,
+    device_map="auto"
+)
+
+model = PeftModel.from_pretrained(base_model, "./lora_model")
+tokenizer = AutoTokenizer.from_pretrained("./lora_model")
+
+# Now use model for inference
+"""
+
+
+# ============================================================================
+# MERGE LORA WEIGHTS (OPTIONAL)
+# ============================================================================
+
+"""
+To merge LoRA weights back into base model for deployment:
+
+model = model.merge_and_unload()
+model.save_pretrained("./merged_model")
+
+This creates a full model checkpoint (same size as original).
+Useful for deployment but loses the modularity benefit of LoRA.
+"""`}</CodeBlock>
 
       <h2 id="usage">Usage</h2>
       <p>
